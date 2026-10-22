@@ -91,27 +91,42 @@ If a receipt has several items of the same category, return ONE item with the to
 Return ONLY a valid JSON array. No markdown."""
 
 
+def model_list():
+    """الموديل من Render أولاً (يقبل عدة أسماء مفصولة بفاصلة)، ثم موديلات احتياطية."""
+    models = [m.strip() for m in GEMINI_MODEL.split(",") if m.strip()]
+    for m in ["gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash",
+              "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]:
+        if m not in models:
+            models.append(m)
+    return models
+
+
 def call_gemini(contents):
-    """يرسل الطلب لـ Gemini ويعيد المحاولة تلقائياً عند الازدحام المؤقت (503/429)."""
+    """يجرب كل موديل؛ إذا كان مزدحماً (503/429) أو غير متاح (404) ينتقل للذي بعده."""
     client = genai.Client(api_key=GEMINI_API_KEY)
-    last_err = None
-    for attempt in range(4):
-        try:
-            resp = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=contents,
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
-            )
-            raw = resp.text.strip().replace("```json", "").replace("```", "").strip()
-            data = json.loads(raw)
-            return data if isinstance(data, list) else [data]
-        except Exception as e:
-            last_err = e
-            if any(c in str(e) for c in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")):
-                time.sleep(2 * (attempt + 1))
-                continue
-            raise
-    raise last_err
+    errors = []
+    for round_no in range(2):
+        for model in model_list():
+            try:
+                resp = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+                logger.info(f"Gemini model used: {model}")
+                raw = resp.text.strip().replace("```json", "").replace("```", "").strip()
+                data = json.loads(raw)
+                return data if isinstance(data, list) else [data]
+            except Exception as e:
+                msg = str(e)
+                if any(c in msg for c in ("503", "429", "404", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "NOT_FOUND")):
+                    code = "503" if "503" in msg else "429" if "429" in msg else "404"
+                    errors.append(f"{model}: {code}")
+                    logger.warning(f"Gemini {model} failed ({code}), trying next")
+                    continue
+                raise
+        time.sleep(5)
+    raise RuntimeError("كل موديلات Gemini غير متاحة الآن، حاول بعد قليل.\n" + "\n".join(errors[-5:]))
 
 
 # ---------- Google Drive (نفس طريقة بوت الكوزمتك) ----------
