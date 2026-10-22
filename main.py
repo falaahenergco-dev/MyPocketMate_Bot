@@ -326,7 +326,9 @@ def download_workbook():
         _, done = dl.next_chunk()
     buf.seek(0)
     wb = openpyxl.load_workbook(buf)
-    ensure_structure(wb)
+    if ensure_structure(wb):
+        # أُضيفت ورقة جديدة للملف (أول تشغيل لنسخة جديدة): نحفظها فوراً
+        upload_workbook(wb)
     return wb
 
 
@@ -357,7 +359,9 @@ def style_header(ws, headers, widths):
 
 
 def ensure_structure(wb):
-    """ينشئ ورقتي الحركات والملخص إذا لم تكونا موجودتين (الورقة القديمة تبقى كما هي)."""
+    """ينشئ الأوراق الناقصة. يعيد True إذا أُضيف شيء جديد يحتاج حفظاً."""
+    before = (list(wb.sheetnames), wb[SUMMARY_SHEET].max_column if SUMMARY_SHEET in wb.sheetnames else 0,
+              wb[TX_SHEET].max_column if TX_SHEET in wb.sheetnames else 0)
     if TX_SHEET not in wb.sheetnames:
         ws = wb.create_sheet(TX_SHEET, 0)
         style_header(ws, TX_HEADERS, [13, 22, 22, 14, 30, 16, 16, 12, 12, 12, 12])
@@ -378,8 +382,12 @@ def ensure_structure(wb):
     if BUDGET_SHEET not in wb.sheetnames:
         create_budget_sheet(wb)
     write_budget_formulas(wb[BUDGET_SHEET])
+    was_missing = DASH_SHEET not in before[0]
     write_dashboard(wb)
     wb.active = wb.sheetnames.index(DASH_SHEET)
+    after = (wb[SUMMARY_SHEET].max_column, wb[TX_SHEET].max_column)
+    return was_missing or any(n not in before[0] for n in (TX_SHEET, SUMMARY_SHEET, BUDGET_SHEET)) \
+        or after != before[1:]
 
 
 def create_budget_sheet(wb):
@@ -1249,6 +1257,8 @@ BUTTON_ACTIONS = {BTN_BALANCE: balance_cmd, BTN_MONTH: month_cmd, BTN_WEEK: week
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
+        await update.message.reply_text(
+            f"⛔ هذا البوت خاص. رقم حسابك {update.effective_user.id} غير موجود في ALLOWED_USER_IDS")
         return
     text = update.message.text
     if text in BUTTON_ACTIONS:
