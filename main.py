@@ -158,8 +158,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await update.message.reply_text("❌ حدث خطأ أثناء التحديث في Google Sheets.")
     except Exception as e:
-        logging.error(f"Parsing error: {e}")
-        await update.message.reply_text("لم أتمكن من فهم المدخلات بشكل دقيق، يرجى إعادة المحاولة.")
+        logging.exception(f"Parsing error: {e}")
+        await update.message.reply_text(f"لم أتمكن من فهم المدخلات.\nخطأ: {type(e).__name__}: {str(e)[:300]}")
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -186,8 +186,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await update.message.reply_text("❌ حدث خطأ أثناء التسجيل في Google Sheets.")
     except Exception as e:
-        logging.error(f"Photo parsing error: {e}")
-        await update.message.reply_text("عذراً، لم أستطع قراءة الفاتورة بوضوح.")
+        logging.exception(f"Photo parsing error: {e}")
+        await update.message.reply_text(f"عذراً، لم أستطع قراءة الفاتورة.\nخطأ: {type(e).__name__}: {str(e)[:300]}")
 
 
 def main():
