@@ -23,6 +23,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SERVICE_ACCOUNT_JSON = os.environ.get("SERVICE_ACCOUNT_JSON")
 GOOGLE_FILE_ID = os.environ.get("GOOGLE_FILE_ID", "1jf8dawjd96Cxi2H7Ik6st4R2rzsDH8Gd")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 
 # ---------- خادم صغير لـ Render (فحص المنفذ) ----------
@@ -141,7 +142,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model=GEMINI_MODEL,
             contents=[SYSTEM_PROMPT, f"Input text: {user_text}"],
             config=types.GenerateContentConfig(response_mime_type="application/json")
         )
@@ -170,7 +171,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         client = genai.Client(api_key=GEMINI_API_KEY)
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model=GEMINI_MODEL,
             contents=[SYSTEM_PROMPT, image, "Extract expenses from this receipt."],
             config=types.GenerateContentConfig(response_mime_type="application/json")
         )
