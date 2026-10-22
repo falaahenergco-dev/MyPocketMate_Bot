@@ -36,6 +36,26 @@ MONTHLY_SALARY = float(os.environ.get("MONTHLY_SALARY", "150000"))
 CURRENCY = os.environ.get("CURRENCY", "دينار")
 # اختياري: ضع رقم حسابك في تيليغرام حتى لا يستخدم البوت غيرك (يظهر لك عند /start)
 ALLOWED_USER_IDS = {x.strip() for x in os.environ.get("ALLOWED_USER_IDS", "").split(",") if x.strip()}
+# أسماء المستخدمين لمناداتهم: رقم_الحساب:الاسم مفصولة بفاصلة، مثلاً 1320344513:إيمان,987654321:علي
+USER_NAMES = {}
+for _pair in os.environ.get("USER_NAMES", "").split(","):
+    if ":" in _pair:
+        _uid, _name = _pair.split(":", 1)
+        if _uid.strip() and _name.strip():
+            USER_NAMES[_uid.strip()] = _name.strip()
+
+
+def name_for(user):
+    """اسم المستخدم من USER_NAMES، وإلا اسمه في تيليغرام."""
+    if user is None:
+        return None
+    return USER_NAMES.get(str(user.id)) or (user.first_name or "").strip() or None
+
+
+def ya(name):
+    return f" يا {name}" if name else ""
+
+
 # التقرير الأسبوعي: يوم الخميس، الساعة (بتوقيت العراق)
 REPORT_HOUR = int(os.environ.get("REPORT_HOUR", "21"))
 IRAQ_TZ = timezone(timedelta(hours=3))
@@ -77,12 +97,16 @@ def period_label(ref):
 TX_SHEET = "الحركات"
 SUMMARY_SHEET = "الملخص الشهري"
 BUDGET_SHEET = "الميزانية"
+DASH_SHEET = "الوضع المالي"
+RATE_CELL = "C5"  # خانة سعر الدولار في ورقة الوضع المالي (تكتبه أنت)
 TOTAL_BUDGET = "إجمالي المصاريف"
 
 TX_HEADERS = ["التاريخ", "النوع", "التصنيف", "المبلغ", "الوصف",
               "الرصيد المتاح", "المدخرات", "الذهب", "ديون عليّ", "ديون لي", "الدولار $"]
 SUMMARY_HEADERS = ["الشهر", "الدخل", "المصاريف", "الادخار", "السحب من المدخرات",
-                   "صافي الادخار", "نسبة الادخار", "المتبقي من الدخل"]
+                   "صافي الادخار", "نسبة الادخار", "المتبقي من الدخل",
+                   "رصيد بداية الشهر", "الرصيد المتاح (الآن / نهاية الشهر)"]
+SUMMARY_WIDTHS = [12, 14, 14, 14, 18, 14, 14, 18, 18, 24]
 
 # أنواع الحركات وتأثير كل نوع على الأرصدة:
 # المفاتيح: avail = الرصيد المتاح، savings = المدخرات، gold = الذهب، owe = ديون عليّ، lent = ديون لي
@@ -123,7 +147,7 @@ BALANCE_COLS = {"avail": "F", "savings": "G", "gold": "H", "owe": "I", "lent": "
 BALANCE_NAMES = {"avail": "💵 الرصيد المتاح", "savings": "🏦 المدخرات بالدينار", "gold": "🪙 الذهب",
                  "owe": "📕 ديون عليّ", "lent": "📗 ديون لي", "usd": "💲 المدخرات بالدولار"}
 
-INCOME_CATEGORIES = ["الراتب", "دخل إضافي", "هدايا", "أخرى"]
+INCOME_CATEGORIES = ["الراتب", "من العائلة", "دخل إضافي", "هدايا", "أخرى"]
 EXPENSE_CATEGORIES = ["الكافيهات والمطاعم", "الجامعة", "الجيم والرياضة", "المواصلات",
                       "الاتصالات والإنترنت", "التسوق والملابس", "الصحة", "الفواتير والمنزل",
                       "هدايا للآخرين", "أخرى"]
@@ -171,7 +195,9 @@ A) A transaction:
 {{"kind":"tx","type":"<TYPE>","category":"<CATEGORY>","amount":NUMBER,"description":"short Arabic text","date":"YYYY-MM-DD"}}
 
 TYPE must be exactly one of:
-- "دخل": money received (salary, bonus, side income, gift received)
+- "دخل": money received. Category: "الراتب" = his monthly salary; "من العائلة" = money from family
+  (أخي / أبي / أمي / أهلي أعطوني); "دخل إضافي" = side work, bonus, selling something; "هدايا" = gifts from others.
+  Put the source in the description (e.g. "من أخي").
 - "مصروف": money spent
 - "ادخار": moving money INTO fixed savings (ادخرت / حطيت بالمدخرات / وفرت)
 - "سحب من المدخرات": taking money OUT of savings (سحبت من المدخرات)
@@ -344,11 +370,16 @@ def ensure_structure(wb):
         rewrite_balance_formulas(ws, 2)
     if SUMMARY_SHEET not in wb.sheetnames:
         ws = wb.create_sheet(SUMMARY_SHEET, 1)
-        style_header(ws, SUMMARY_HEADERS, [12, 14, 14, 14, 18, 14, 14, 18])
+        style_header(ws, SUMMARY_HEADERS, SUMMARY_WIDTHS)
+    ws = wb[SUMMARY_SHEET]
+    if ws.cell(row=1, column=len(SUMMARY_HEADERS)).value in (None, ""):
+        style_header(ws, SUMMARY_HEADERS, SUMMARY_WIDTHS)
+    write_summary_balance_formulas(ws)
     if BUDGET_SHEET not in wb.sheetnames:
         create_budget_sheet(wb)
     write_budget_formulas(wb[BUDGET_SHEET])
-    wb.active = wb.sheetnames.index(TX_SHEET)
+    write_dashboard(wb)
+    wb.active = wb.sheetnames.index(DASH_SHEET)
 
 
 def create_budget_sheet(wb):
@@ -363,6 +394,120 @@ def create_budget_sheet(wb):
             if cat == TOTAL_BUDGET:
                 c.font = Font(bold=True)
         ws.cell(row=i, column=1, value=cat)
+
+
+def total_formula(key, extra_cond=""):
+    """مجموع أثر كل الحركات على رصيد معيّن (avail/savings/...) كمعادلة SUMIFS."""
+    t = f"'{TX_SHEET}'"
+    part = lambda typ: f'SUMIFS({t}!$D:$D,{t}!$B:$B,"{typ}"{extra_cond})'
+    plus = [x for x, eff in TYPES.items() if eff.get(key) == 1]
+    minus = [x for x, eff in TYPES.items() if eff.get(key) == -1]
+    expr = "+".join(part(x) for x in plus) + "".join("-" + part(x) for x in minus)
+    return "=" + (expr or "0")
+
+
+def write_dashboard(wb):
+    """ورقة 'الوضع المالي': كل الأرصدة والشهر الحالي بمعادلات تتحدث تلقائياً."""
+    rate = None
+    if DASH_SHEET in wb.sheetnames:
+        rate = wb[DASH_SHEET][RATE_CELL].value
+        del wb[DASH_SHEET]
+    if rate in (None, "") and USD_RATE:
+        rate = USD_RATE
+    ws = wb.create_sheet(DASH_SHEET, 0)
+    ws.sheet_view.rightToLeft = True
+    ws.sheet_view.showGridLines = False
+    ws.column_dimensions["A"].width = 3
+    ws.column_dimensions["B"].width = 34
+    ws.column_dimensions["C"].width = 22
+    ws.column_dimensions["D"].width = 40
+
+    t = f"'{TX_SHEET}'"
+    S = MONTH_START_DAY
+    start = f"DATE(YEAR(TODAY()),MONTH(TODAY())-IF(DAY(TODAY())<{S},1,0),{S})"
+    in_month = f',{t}!$A:$A,">="&{start},{t}!$A:$A,"<"&EDATE({start},1)'
+    income = lambda cat=None: (f'=SUMIFS({t}!$D:$D,{t}!$B:$B,"دخل"' +
+                               (f',{t}!$C:$C,"{cat}"' if cat else "") + in_month + ")")
+    month_type = lambda typ: f'=SUMIFS({t}!$D:$D,{t}!$B:$B,"{typ}"{in_month})'
+
+    title_fill = PatternFill("solid", fgColor="1F4E78")
+    section_fill = PatternFill("solid", fgColor="D9E2F3")
+    total_fill = PatternFill("solid", fgColor="E2EFDA")
+
+    def title(row, text):
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=4)
+        c = ws.cell(row=row, column=2, value=text)
+        c.font, c.fill = Font(bold=True, size=16, color="FFFFFF"), title_fill
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[row].height = 32
+
+    def section(row, text):
+        for col in (2, 3, 4):
+            ws.cell(row=row, column=col).fill = section_fill
+        c = ws.cell(row=row, column=2, value=text)
+        c.font = Font(bold=True, size=13, color="1F4E78")
+        ws.row_dimensions[row].height = 24
+
+    def line(row, label, value, note="", fmt_=AMOUNT_FMT, bold=False, fill=None):
+        a = ws.cell(row=row, column=2, value=label)
+        b = ws.cell(row=row, column=3, value=value)
+        n = ws.cell(row=row, column=4, value=note)
+        for c in (a, b, n):
+            c.border = BORDER
+            c.alignment = Alignment(horizontal="right" if c is not b else "center", vertical="center")
+            if fill:
+                c.fill = fill
+        a.font = Font(bold=bold, size=12)
+        b.font = Font(bold=True, size=13 if bold else 12, color="1F4E78" if bold else "000000")
+        n.font = Font(size=10, color="808080")
+        b.number_format = fmt_
+        ws.row_dimensions[row].height = 22
+
+    title(2, "📊 الوضع المالي")
+    ws.merge_cells("B3:D3")
+    c = ws["B3"]
+    c.value = '="آخر تحديث: "&TEXT(TODAY(),"yyyy-mm-dd")'
+    c.alignment = Alignment(horizontal="center")
+    c.font = Font(size=10, color="808080")
+
+    # سعر الدولار (يكتبه المستخدم)
+    line(5, "💱 سعر الدولار (اكتبه أنت)", rate, "اكتب سعر الـ 100$ ÷ 100، مثلاً 1450. يُستخدم للتقدير فقط")
+    ws[RATE_CELL].fill = PatternFill("solid", fgColor="FFF2CC")
+
+    section(7, "💼 ما تملكه الآن")
+    line(8, "💵 الرصيد المتاح للصرف", total_formula("avail"))
+    line(9, "🏦 المدخرات الثابتة (دينار)", total_formula("savings"))
+    line(10, "💲 المدخرات بالدولار", total_formula("usd"), "", '"$"#,##0')
+    line(11, "💲 قيمة الدولار بالدينار (تقريبية)", f'=IF(N({RATE_CELL})>0,C10*{RATE_CELL},"")',
+         "تحتاج سعر الدولار في الأعلى")
+    line(12, "🪙 الذهب", total_formula("gold"))
+    line(13, "📗 ديون لي عند الناس", total_formula("lent"))
+    line(14, "📕 ديون عليّ", total_formula("owe"))
+    line(15, "💎 إجمالي ما تملك", "=C8+C9+N(C11)+C12+C13-C14",
+         "المتاح + المدخرات + الدولار + الذهب + ديون لك − ديون عليك", bold=True, fill=total_fill)
+
+    section(17, "📅 الشهر الحالي (من يوم الراتب)")
+    line(18, "يبدأ من", f"={start}", "", "yyyy-mm-dd")
+    line(19, "ينتهي في", f"=EDATE({start},1)-1", "", "yyyy-mm-dd")
+    line(20, "⏳ الأيام المتبقية", f"=EDATE({start},1)-TODAY()", "", "0")
+    line(21, "💰 الراتب", income("الراتب"))
+    line(22, "👨‍👩‍👦 من العائلة", income("من العائلة"))
+    line(23, "➕ دخل إضافي وهدايا", f"{income('دخل إضافي')}+{income('هدايا')[1:]}+{income('أخرى')[1:]}")
+    line(24, "📥 إجمالي الدخل", income(), bold=True)
+    line(25, "💸 المصاريف", month_type("مصروف"))
+    line(26, "🏦 صافي الادخار", f"{month_type('ادخار')}-{month_type('سحب من المدخرات')[1:]}")
+    line(27, "📈 نسبة الادخار من الدخل", '=IF(C24>0,C26/C24,"")', "", "0%")
+    line(28, "💵 المتبقي للصرف", "=C8", "الرصيد المتاح الآن", bold=True, fill=total_fill)
+    line(29, "📆 تقدر تصرف يومياً", '=IF(C20>0,C28/C20,"")',
+         "المتبقي ÷ الأيام المتبقية حتى الراتب القادم", bold=True, fill=total_fill)
+
+
+def read_usd_rate(wb):
+    if DASH_SHEET in wb.sheetnames:
+        r = to_number(wb[DASH_SHEET][RATE_CELL].value)
+        if r > 0:
+            return r
+    return USD_RATE
 
 
 def write_budget_formulas(ws):
@@ -454,6 +599,28 @@ def ensure_month_row(wb, d):
         c.border = BORDER
         c.alignment = Alignment(horizontal="center")
         c.number_format = "yyyy-mm-dd" if i == 1 else ("0%" if i == 7 else AMOUNT_FMT)
+    write_summary_balance_formulas(ws)
+
+
+def avail_until_formula(cond):
+    """رصيد الدينار المتاح لكل الحركات التي تاريخها يحقق الشرط cond (مثلاً "<"&A2)."""
+    t = f"'{TX_SHEET}'"
+    part = lambda typ: f'SUMIFS({t}!$D:$D,{t}!$B:$B,"{typ}",{t}!$A:$A,{cond})'
+    plus = [x for x, eff in TYPES.items() if eff.get("avail") == 1]
+    minus = [x for x, eff in TYPES.items() if eff.get("avail") == -1]
+    return "=" + "+".join(part(x) for x in plus) + "".join("-" + part(x) for x in minus)
+
+
+def write_summary_balance_formulas(ws):
+    r = 2
+    while ws.cell(row=r, column=1).value not in (None, ""):
+        ws.cell(row=r, column=8, value=f'=IF(B{r}>0,B{r}-C{r}-F{r},"")')  # فارغ إذا لم يُسجَّل دخل
+        for col, cond in ((9, f'"<"&$A{r}'), (10, f'"<"&EDATE($A{r},1)')):
+            c = ws.cell(row=r, column=col, value=avail_until_formula(cond))
+            c.border = BORDER
+            c.alignment = Alignment(horizontal="center")
+            c.number_format = AMOUNT_FMT
+        r += 1
 
 
 def append_tx(wb, tx):
@@ -534,13 +701,39 @@ def balances(rows):
     return b
 
 
-def balances_text(b):
+def overview_text(wb, rows, name=None):
+    """رد زر 💰 رصيدي: الأرصدة + إجمالي ما تملك + كم تقدر تصرف يومياً."""
+    b = balances(rows)
+    rate = read_usd_rate(wb)
+    usd_value = b["usd"] * rate if rate else 0
+    total = b["avail"] + b["savings"] + usd_value + b["gold"] + b["lent"] - b["owe"]
+    today = now_date()
+    next_start = add_months(period_start(today), 1)
+    days_left = (next_start - today).days
+    m = [r for r in rows if in_period(r["date"], today)]
+    income = sum(r["amount"] for r in m if r["type"] == "دخل")
+    spent = sum(r["amount"] for r in m if r["type"] == "مصروف")
+    lines = [f"💼 وضعك المالي{ya(name)}", f"💬 تبقى لديك {fmt(b['avail'])} للصرف", "", balances_text(b, rate)]
+    lines.append(f"\n💎 إجمالي ما تملك: {fmt(total)}" + ("" if rate or not b["usd"] else " (بدون الدولار)"))
+    lines.append(f"\n📅 هذا الشهر ({period_label(today)}):")
+    lines.append(f"• الدخل: {fmt(income)}")
+    lines.append(f"• المصاريف: {fmt(spent)}")
+    lines.append(f"• ⏳ باقي {days_left} يوم على الراتب القادم")
+    if days_left > 0 and b["avail"] > 0:
+        lines.append(f"• 📆 تقدر تصرف يومياً: {fmt(round(b['avail'] / days_left))}")
+    if not rate and b["usd"]:
+        lines.append("\n💡 لحساب الدولار ضمن الإجمالي، اكتب سعر الصرف في ورقة «الوضع المالي»")
+    return "\n".join(lines)
+
+
+def balances_text(b, rate=None):
     lines = [f"{BALANCE_NAMES['avail']}: {fmt(b['avail'])}",
              f"{BALANCE_NAMES['savings']}: {fmt(b['savings'])}"]
     if abs(b["usd"]) > 0.005:
         line = f"{BALANCE_NAMES['usd']}: {fmt(b['usd'], usd=True)}"
-        if USD_RATE:
-            line += f" (≈ {fmt(b['usd'] * USD_RATE)})"
+        rate = rate or USD_RATE
+        if rate:
+            line += f" (≈ {fmt(b['usd'] * rate)})"
         lines.append(line)
     for k in ("gold", "owe", "lent"):
         if abs(b[k]) > 0.005:
@@ -554,10 +747,17 @@ def month_text(rows, d=None):
     s = lambda t: sum(r["amount"] for r in m if r["type"] == t)
     income, spent, saved, withdrawn = s("دخل"), s("مصروف"), s("ادخار"), s("سحب من المدخرات")
     net = saved - withdrawn
+    start = period_start(d)
+    end = add_months(start, 1)
+    avail_until = lambda limit: sum(TYPES.get(r["type"], {}).get("avail", 0) * r["amount"]
+                                    for r in rows if r["date"] and r["date"] < limit)
+    is_current = in_period(now_date(), d)
     lines = [f"📅 ملخص الشهر ({period_label(d)}):",
+             f"• رصيد بداية الشهر: {fmt(avail_until(start))}",
              f"• الدخل: {fmt(income)}",
              f"• المصاريف: {fmt(spent)}",
-             f"• صافي الادخار: {fmt(net)}" + (f" ({net / income:.0%} من الدخل)" if income else "")]
+             f"• صافي الادخار: {fmt(net)}" + (f" ({net / income:.0%} من الدخل)" if income else ""),
+             f"• {'الرصيد المتاح الآن' if is_current else 'الرصيد في نهاية الشهر'}: {fmt(avail_until(end))}"]
     by_cat = {}
     for r in m:
         if r["type"] == "مصروف":
@@ -686,8 +886,14 @@ def validate_tx(item):
     d = as_date(item.get("date")) or now_date()
     if d > now_date():
         d = now_date()
-    return {"type": t, "category": cat, "amount": amount, "date": d,
-            "description": str(item.get("description", "")).strip()[:200]}, None
+    desc = str(item.get("description", "")).strip()[:200]
+    if t == "دخل" and cat == "الراتب":
+        # راتب وصل قبل يوم بداية الشهر بأيام قليلة = راتب الشهر القادم
+        next_start = add_months(period_start(d), 1)
+        if 0 < (next_start - d).days <= 5:
+            desc = (desc + " • " if desc else "") + f"وصل مبكراً بتاريخ {d.strftime('%d/%m')}"
+            d = next_start
+    return {"type": t, "category": cat, "amount": amount, "date": d, "description": desc}, None
 
 
 TYPE_ICONS = {"دخل": "💰", "مصروف": "🧾", "ادخار": "🏦", "سحب من المدخرات": "🔓",
@@ -710,7 +916,7 @@ def describe_tx(tx):
 ACCOUNT_KEYS = {"avail", "savings", "gold", "owe", "lent", "usd"}
 
 
-def process(items, wb):
+def process(items, wb, name=None):
     """ينفّذ ما فهمه Gemini. يعيد dict فيه: text, needs_answer, added (العمليات المضافة لزر التراجع)."""
     txs, queries, problems, clarify, heard = [], [], [], None, None
     sets, deletes, edits, budgets_set = [], [], [], []
@@ -795,7 +1001,7 @@ def process(items, wb):
             running[k] += sign * tx["amount"]
         added.append({"row": append_tx(wb, tx), "type": tx["type"], "amount": tx["amount"]})
     if txs:
-        replies.append("✅ تم التسجيل:\n" + "\n".join(describe_tx(t) for t in txs))
+        replies.append(f"✅ تم تسجيل العملية{ya(name)}:\n" + "\n".join(describe_tx(t) for t in txs))
 
     # ── تصحيح رصيد إلى قيمة محددة (يُسجَّل كتسوية بالفرق) ──
     for st in sets:
@@ -829,7 +1035,7 @@ def process(items, wb):
         if final["avail"] < 0:
             warnings.append("⚠️ الرصيد المتاح بالسالب، هل نسيت تسجيل دخل أو رصيد افتتاحي؟")
         if txs or sets or deletes or edits:
-            replies.append(balances_text(final))
+            replies.append(f"💬{ya(name)}، تبقى لديك {fmt(final['avail'])} للصرف\n\n" + balances_text(final))
         # تنبيهات الميزانية للتصنيفات التي صُرف عليها الآن
         spent_cats = [t["category"] for t in txs if t["type"] == "مصروف"]
         if spent_cats:
@@ -846,7 +1052,7 @@ def process(items, wb):
         elif kind == "category" and q.get("category") in EXPENSE_CATEGORIES:
             replies.append(category_text(rows, q["category"], q.get("period", "month")))
         elif not changes:
-            replies.append(balances_text(balances(rows)))
+            replies.append(overview_text(wb, rows, name))
 
     return result("\n\n".join(replies + warnings + ["⚠️ " + p for p in problems]), False, added)
 
@@ -884,7 +1090,8 @@ HELP_TEXT = (
     "• استلفت من أحمد 100 ألف / سددت لأحمد 50 ألف\n"
     "• سلفت علي 25 ألف / رجعلي علي 25 ألف\n"
     "• عندي حالياً 300 ألف ومدخراتي مليون (أول مرة فقط)\n"
-    "• عندي 500 دولار مدخرة / صرّفت 100 دولار بـ 145 ألف\n\n"
+    "• عندي 500 دولار مدخرة / صرّفت 100 دولار بـ 145 ألف\n"
+    "• أخي أعطاني 50 ألف / بعت شي بـ 30 ألف\n\n"
     "🎯 الميزانية:\n"
     "• ميزانية الكافيهات 30 ألف\n"
     "• ميزانيتي الكلية للمصاريف 120 ألف\n\n"
@@ -910,7 +1117,8 @@ async def safe_reply(update, coro_factory, name):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"👋 أهلاً! أنا PocketMate، محاسبك الشخصي.\n🆔 رقم حسابك: {update.effective_user.id}\n\n" + HELP_TEXT,
+        f"👋 أهلاً{ya(name_for(update.effective_user))}! أنا PocketMate، محاسبك الشخصي.\n"
+        f"🆔 رقم حسابك: {update.effective_user.id}\n\n" + HELP_TEXT,
         reply_markup=MAIN_KEYBOARD)
 
 
@@ -920,8 +1128,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if allowed(update):
-        await safe_reply(update, lambda: update.effective_message.reply_text(
-            balances_text(balances(read_rows(download_workbook())))), "balance")
+        async def go():
+            wb = download_workbook()
+            await update.effective_message.reply_text(overview_text(wb, read_rows(wb), name_for(update.effective_user)))
+        await safe_reply(update, go, "balance")
 
 
 async def month_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -979,7 +1189,7 @@ async def undo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             delete_tx_row(wb, last["row"])
             upload_workbook(wb)
             await update.effective_message.reply_text(
-                "🗑️ حُذفت آخر عملية:\n" + describe_tx({**last, "date": last["date"] or now_date()}) +
+                f"🗑️ حُذفت آخر عملية{ya(name_for(update.effective_user))}:\n" + describe_tx({**last, "date": last["date"] or now_date()}) +
                 "\n\n" + balances_text(balances(read_rows(wb))))
         await safe_reply(update, go, "undo")
 
@@ -1014,7 +1224,7 @@ async def undo_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if removed:
             upload_workbook(wb)
         await query.edit_message_reply_markup(None)
-        text = ("↩️ تم التراجع عن:\n" + "\n".join(describe_tx({**r, "date": r["date"] or now_date()}) for r in removed)
+        text = (f"↩️ تم التراجع{ya(name_for(update.effective_user))} عن:\n" + "\n".join(describe_tx({**r, "date": r["date"] or now_date()}) for r in removed)
                 if removed else "⚠️ العملية تغيّرت أو حُذفت مسبقاً")
         await query.message.reply_text(text + "\n\n" + balances_text(balances(read_rows(wb))))
     except Exception as e:
@@ -1026,7 +1236,7 @@ async def run_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, parts, msg,
     """parts = محتوى الرسالة (نص/صورة/صوت). نقرأ الملف أولاً حتى يعرف Gemini العمليات السابقة."""
     wb = download_workbook()
     items = call_gemini([build_prompt(read_rows(wb))] + parts)
-    res = process(items, wb)
+    res = process(items, wb, name_for(update.effective_user))
     # إذا سأل البوت سؤال توضيح، نحفظ الرسالة الأصلية لنربطها بالجواب
     heard = next((i.get("text") for i in items if i.get("kind") == "heard"), None)
     context.user_data["pending"] = (pending_text or heard) if res["needs_answer"] else None
@@ -1105,8 +1315,10 @@ async def weekly_job(context: ContextTypes.DEFAULT_TYPE):
         logger.exception("weekly report")
         text = f"❌ تعذّر إعداد التقرير الأسبوعي: {e}"
     for uid in ALLOWED_USER_IDS:
+        name = USER_NAMES.get(uid)
+        greeting = f"🌙 مساء الخير{ya(name)}، هذا تقريرك الأسبوعي\n\n"
         try:
-            await context.bot.send_message(chat_id=int(uid), text=text)
+            await context.bot.send_message(chat_id=int(uid), text=greeting + text)
         except Exception:
             logger.exception(f"send weekly to {uid}")
 
@@ -1119,16 +1331,16 @@ async def salary_day_job(context: ContextTypes.DEFAULT_TYPE):
         wb = download_workbook()
         rows = read_rows(wb)
         prev_month_day = now_date() - timedelta(days=1)
-        text = ("🗓️ اليوم بداية شهرك المالي الجديد!\n\n"
+        text = ("🗓️ اليوم بداية شهرك المالي الجديد{NAME}!\n\n"
                 "📌 ملخص الشهر الذي انتهى:\n" + month_text(rows, prev_month_day) +
                 "\n\n" + balances_text(balances(rows)) +
                 "\n\n💰 هل نزل الراتب؟ اكتب: نزل الراتب\n🏦 ولا تنسَ تدّخر منه، مثلاً: ادخرت 30 ألف")
     except Exception as e:
         logger.exception("salary day")
-        text = "🗓️ اليوم بداية شهرك المالي. هل نزل الراتب؟ اكتب: نزل الراتب"
+        text = "🗓️ اليوم بداية شهرك المالي{NAME}. هل نزل الراتب؟ اكتب: نزل الراتب"
     for uid in ALLOWED_USER_IDS:
         try:
-            await context.bot.send_message(chat_id=int(uid), text=text)
+            await context.bot.send_message(chat_id=int(uid), text=text.replace("{NAME}", ya(USER_NAMES.get(uid))))
         except Exception:
             logger.exception(f"send salary-day to {uid}")
 
