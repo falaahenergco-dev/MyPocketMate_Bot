@@ -186,7 +186,8 @@ def build_prompt(rows=None):
     recent = "\n".join(
         f"#{r['row']} | {r['date']} | {r['type']} | {r['category']} | {int(r['amount'])} | {r['description']}"
         for r in (rows or [])[-25:]) or "(no transactions yet)"
-    return f"""You are a precise personal-finance bookkeeper for an Iraqi user. Currency: Iraqi dinar.
+    return f"""You are a precise personal-finance bookkeeper for an Iraqi user. The user is a WOMAN: any Arabic text you
+write to her (clarify questions) MUST use feminine forms (مثلاً: كم صرفتِ؟ هل تقصدين...؟ اكتبي المبلغ). Currency: Iraqi dinar.
 Today is {today.isoformat()} (yesterday = {(today - timedelta(days=1)).isoformat()}).
 The user writes in Arabic (often Iraqi dialect: شكد = how much, صرفت = I spent, نزل الراتب = salary arrived).
 
@@ -196,7 +197,7 @@ A) A transaction:
 {{"kind":"tx","type":"<TYPE>","category":"<CATEGORY>","amount":NUMBER,"description":"short Arabic text","date":"YYYY-MM-DD"}}
 
 TYPE must be exactly one of:
-- "دخل": money received. Category: "الراتب" = his monthly salary; "من العائلة" = money from family
+- "دخل": money received. Category: "الراتب" = her monthly salary; "من العائلة" = money from family
   (أخي / أبي / أمي / أهلي أعطوني); "دخل إضافي" = side work, bonus, selling something; "هدايا" = gifts from others.
   Put the source in the description (e.g. "من أخي").
 - "مصروف": money spent
@@ -207,19 +208,19 @@ TYPE must be exactly one of:
 - "سداد قرض": the user repaid a debt (سددت / رجعت الدين / دفعت قسط)
 - "إقراض": the user lent money to someone (سلفت فلان / أقرضت)
 - "استرداد قرض": someone repaid the user (رجعلي فلان فلوسي)
-- "رصيد افتتاحي": the user states how much cash he has right now (عندي حالياً / رصيدي الحالي)
-- "رصيد افتتاحي للمدخرات": the user states his existing savings total
-- "رصيد افتتاحي للذهب": the user states the value of gold he already owns
+- "رصيد افتتاحي": the user states how much cash she has right now (عندي حالياً / رصيدي الحالي)
+- "رصيد افتتاحي للمدخرات": the user states her existing savings total
+- "رصيد افتتاحي للذهب": the user states the value of gold she already owns
 
 US DOLLAR types (for these 4 the amount is in DOLLARS, not dinars):
-- "رصيد افتتاحي للدولار": the user states how many dollars he already has saved
-- "إيداع دولار": dollars added to his dollar savings (received / bought dollars)
-- "سحب دولار": dollars taken out of his dollar savings
+- "رصيد افتتاحي للدولار": the user states how many dollars she already has saved
+- "إيداع دولار": dollars added to her dollar savings (received / bought dollars)
+- "سحب دولار": dollars taken out of her dollar savings
 Exchange (amount in DINARS, not counted as income or expense):
 - "تصريف دولار إلى دينار": dinars received when selling dollars -> ALSO add "سحب دولار" with the dollar amount
 - "شراء دولار بالدينار": dinars paid to buy dollars -> ALSO add "إيداع دولار" with the dollar amount
 Currency rules: "دولار" / "$" / "دولارات" = dollars; otherwise dinars. NEVER put a dollar amount in a dinar type.
-If the user paid an expense in dollars, ask (C) how much it is in dinars, unless he said it.
+If the user paid an expense in dollars, ask (C) how much it is in dinars, unless she said it.
 
 CATEGORY:
 - for "دخل": one of {INCOME_CATEGORIES}
@@ -243,7 +244,7 @@ E) Correct a balance to an exact value (رصيدي الصحيح / صحح الم�
 {{"kind":"set_balance","account":"avail|savings|gold|owe|lent|usd","value":NUMBER}}
    avail = available cash (dinar), savings = fixed savings in dinar, usd = savings in US dollars (value in dollars),
    gold, owe = debts I owe, lent = money others owe me.
-   Use this (not "رصيد افتتاحي") when the user says he wants to correct / fix / update a balance,
+   Use this (not "رصيد افتتاحي") when the user says she wants to correct / fix / update a balance,
    or when an opening balance already exists in the transactions below.
 
 F) Delete a previous transaction (احذف / امسح / ألغِ عملية ...):
@@ -265,7 +266,7 @@ I) Budget status question (شكد باقي من الميزانية / وضع ال
 J) If the input is a VOICE message, ALSO add first: {{"kind":"heard","text":"exact Arabic transcription"}}
 
 C) If the amount or the meaning is missing or truly ambiguous, DO NOT guess:
-{{"kind":"clarify","question":"short Arabic question to the user"}}
+{{"kind":"clarify","question":"short Arabic question to the user, feminine form"}}
 
 D) Not related to money:
 {{"kind":"unknown"}}"""
@@ -480,10 +481,10 @@ def write_dashboard(wb):
     c.font = Font(size=10, color="808080")
 
     # سعر الدولار (يكتبه المستخدم)
-    line(5, "💱 سعر الدولار (اكتبه أنت)", rate, "اكتب سعر الـ 100$ ÷ 100، مثلاً 1450. يُستخدم للتقدير فقط")
+    line(5, "💱 سعر الدولار (اكتبيه أنتِ)", rate, "اكتبي سعر الـ 100$ ÷ 100، مثلاً 1450. يُستخدم للتقدير فقط")
     ws[RATE_CELL].fill = PatternFill("solid", fgColor="FFF2CC")
 
-    section(7, "💼 ما تملكه الآن")
+    section(7, "💼 ما تملكينه الآن")
     line(8, "💵 الرصيد المتاح للصرف", total_formula("avail"))
     line(9, "🏦 المدخرات الثابتة (دينار)", total_formula("savings"))
     line(10, "💲 المدخرات بالدولار", total_formula("usd"), "", '"$"#,##0')
@@ -492,8 +493,8 @@ def write_dashboard(wb):
     line(12, "🪙 الذهب", total_formula("gold"))
     line(13, "📗 ديون لي عند الناس", total_formula("lent"))
     line(14, "📕 ديون عليّ", total_formula("owe"))
-    line(15, "💎 إجمالي ما تملك", "=C8+C9+N(C11)+C12+C13-C14",
-         "المتاح + المدخرات + الدولار + الذهب + ديون لك − ديون عليك", bold=True, fill=total_fill)
+    line(15, "💎 إجمالي ما تملكين", "=C8+C9+N(C11)+C12+C13-C14",
+         "المتاح + المدخرات + الدولار + الذهب + ديون لكِ − ديون عليكِ", bold=True, fill=total_fill)
 
     section(17, "📅 الشهر الحالي (من يوم الراتب)")
     line(18, "يبدأ من", f"={start}", "", "yyyy-mm-dd")
@@ -507,7 +508,7 @@ def write_dashboard(wb):
     line(26, "🏦 صافي الادخار", f"{month_type('ادخار')}-{month_type('سحب من المدخرات')[1:]}")
     line(27, "📈 نسبة الادخار من الدخل", '=IF(C24>0,C26/C24,"")', "", "0%")
     line(28, "💵 المتبقي للصرف", "=C8", "الرصيد المتاح الآن", bold=True, fill=total_fill)
-    line(29, "📆 تقدر تصرف يومياً", '=IF(C20>0,C28/C20,"")',
+    line(29, "📆 تقدرين تصرفين يومياً", '=IF(C20>0,C28/C20,"")',
          "المتبقي ÷ الأيام المتبقية حتى الراتب القادم", bold=True, fill=total_fill)
 
 
@@ -722,16 +723,16 @@ def overview_text(wb, rows, name=None):
     m = [r for r in rows if in_period(r["date"], today)]
     income = sum(r["amount"] for r in m if r["type"] == "دخل")
     spent = sum(r["amount"] for r in m if r["type"] == "مصروف")
-    lines = [f"💼 وضعك المالي{ya(name)}", f"💬 تبقى لديك {fmt(b['avail'])} للصرف", "", balances_text(b, rate)]
-    lines.append(f"\n💎 إجمالي ما تملك: {fmt(total)}" + ("" if rate or not b["usd"] else " (بدون الدولار)"))
+    lines = [f"💼 وضعكِ المالي{ya(name)}", f"💬 تبقى لديكِ {fmt(b['avail'])} للصرف", "", balances_text(b, rate)]
+    lines.append(f"\n💎 إجمالي ما تملكين: {fmt(total)}" + ("" if rate or not b["usd"] else " (بدون الدولار)"))
     lines.append(f"\n📅 هذا الشهر ({period_label(today)}):")
     lines.append(f"• الدخل: {fmt(income)}")
     lines.append(f"• المصاريف: {fmt(spent)}")
     lines.append(f"• ⏳ باقي {days_left} يوم على الراتب القادم")
     if days_left > 0 and b["avail"] > 0:
-        lines.append(f"• 📆 تقدر تصرف يومياً: {fmt(round(b['avail'] / days_left))}")
+        lines.append(f"• 📆 تقدرين تصرفين يومياً: {fmt(round(b['avail'] / days_left))}")
     if not rate and b["usd"]:
-        lines.append("\n💡 لحساب الدولار ضمن الإجمالي، اكتب سعر الصرف في ورقة «الوضع المالي»")
+        lines.append("\n💡 لحساب الدولار ضمن الإجمالي، اكتبي سعر الصرف في ورقة «الوضع المالي»")
     return "\n".join(lines)
 
 
@@ -802,14 +803,14 @@ def budget_line(label, spent, limit):
     pct = spent / limit if limit else 0
     icon = "🚨" if pct >= 1 else "⚠️" if pct >= 0.8 else "✅"
     left = limit - spent
-    tail = f"باقي {fmt(left)}" if left >= 0 else f"تجاوزت بـ {fmt(-left)}"
+    tail = f"باقي {fmt(left)}" if left >= 0 else f"تجاوزتِ بـ {fmt(-left)}"
     return f"{icon} {label}: {fmt(spent)} من {fmt(limit)} ({pct:.0%})\n{progress_bar(pct)} {tail}"
 
 
 def budget_text(rows, budgets, d=None):
     d = d or now_date()
     if not budgets:
-        return ("🎯 لم تحدد ميزانية بعد.\nاكتب مثلاً: ميزانية الكافيهات 30 ألف\n"
+        return ("🎯 لم تحددي ميزانية بعد.\nاكتبي مثلاً: ميزانية الكافيهات 30 ألف\n"
                 "أو: ميزانيتي الكلية للمصاريف 120 ألف")
     lines = [f"🎯 الميزانية ({period_label(d)}):"]
     for cat, limit in budgets.items():
@@ -860,7 +861,7 @@ def weekly_text(rows, budgets, end=None):
         if r["type"] == "مصروف":
             by_cat[r["category"]] = by_cat.get(r["category"], 0) + r["amount"]
     if by_cat:
-        lines.append("\n🧾 أين ذهبت فلوسك:")
+        lines.append("\n🧾 أين ذهبت فلوسكِ:")
         for cat, v in sorted(by_cat.items(), key=lambda x: -x[1])[:6]:
             lines.append(f"• {cat}: {fmt(v)} ({v / spent:.0%})")
         biggest = max((r for r in week if r["type"] == "مصروف"), key=lambda r: r["amount"])
@@ -882,9 +883,9 @@ def validate_tx(item):
         return None, f"لم أفهم نوع العملية ({t})"
     amount = to_number(item.get("amount"))
     if amount <= 0:
-        return None, "لم أجد مبلغاً واضحاً، اكتب المبلغ بالأرقام من فضلك"
+        return None, "لم أجد مبلغاً واضحاً، اكتبي المبلغ بالأرقام من فضلكِ"
     if amount > 1_000_000_000:
-        return None, f"المبلغ كبير جداً ({fmt(amount)})، تأكد منه"
+        return None, f"المبلغ كبير جداً ({fmt(amount)})، تأكدي منه"
     cat = str(item.get("category", "")).strip()
     if t == "دخل":
         cat = cat if cat in INCOME_CATEGORIES else "أخرى"
@@ -953,7 +954,7 @@ def process(items, wb, name=None):
         elif kind == "heard":
             heard = str(it.get("text", "")).strip()
         elif kind == "clarify":
-            clarify = it.get("question") or "ممكن توضح أكثر؟"
+            clarify = it.get("question") or "ممكن توضحين أكثر؟"
 
     prefix = [f"🎙️ سمعت: «{heard}»"] if heard else []
     result = lambda text, needs=False, added=None: {
@@ -965,7 +966,7 @@ def process(items, wb, name=None):
     if not changes and not queries:
         if problems:
             return result("⚠️ " + "\n".join(problems), True)
-        return result("🤔 لم أفهم. أمثلة:\n• قهوة 5000\n• نزل الراتب\n• ادخرت 50 ألف\n"
+        return result("🤔 لم أفهم قصدكِ. أمثلة:\n• قهوة 5000\n• نزل الراتب\n• ادخرت 50 ألف\n"
                       "• سحبت من المدخرات 20 ألف\n• شكد رصيدي؟")
 
     rows = read_rows(wb)
@@ -1011,7 +1012,7 @@ def process(items, wb, name=None):
         if tx["type"] == "سحب دولار" and tx["amount"] > running["usd"] + 0.005:
             warnings.append(f"⚠️ السحب ({fmt(tx['amount'], usd=True)}) أكبر من مدخرات الدولار ({fmt(running['usd'], usd=True)})")
         if tx["type"] == "سداد قرض" and tx["amount"] > running["owe"] + 0.005:
-            warnings.append("⚠️ مبلغ السداد أكبر من الديون المسجلة عليك")
+            warnings.append("⚠️ مبلغ السداد أكبر من الديون المسجلة عليكِ")
         for k, sign in TYPES[tx["type"]].items():
             running[k] += sign * tx["amount"]
         added.append({"row": append_tx(wb, tx), "type": tx["type"], "amount": tx["amount"]})
@@ -1048,9 +1049,9 @@ def process(items, wb, name=None):
         rows = read_rows(wb)
         final = balances(rows)
         if final["avail"] < 0:
-            warnings.append("⚠️ الرصيد المتاح بالسالب، هل نسيت تسجيل دخل أو رصيد افتتاحي؟")
+            warnings.append("⚠️ الرصيد المتاح بالسالب، هل نسيتِ تسجيل دخل أو رصيد افتتاحي؟")
         if txs or sets or deletes or edits:
-            replies.append(f"💬{ya(name)}، تبقى لديك {fmt(final['avail'])} للصرف\n\n" + balances_text(final))
+            replies.append(f"💬{ya(name)}، تبقى لديكِ {fmt(final['avail'])} للصرف\n\n" + balances_text(final))
         # تنبيهات الميزانية للتصنيفات التي صُرف عليها الآن
         spent_cats = [t["category"] for t in txs if t["type"] == "مصروف"]
         if spent_cats:
@@ -1094,10 +1095,10 @@ BTN_BUDGET, BTN_LAST, BTN_HELP = "🎯 الميزانية", "🗂️ آخر ال
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [[BTN_BALANCE, BTN_MONTH], [BTN_WEEK, BTN_BUDGET], [BTN_LAST, BTN_HELP]],
     resize_keyboard=True, is_persistent=True,
-    input_field_placeholder="اكتب أو سجّل صوتك: قهوة 5000")
+    input_field_placeholder="اكتبي أو سجّلي صوتكِ: قهوة 5000")
 
 HELP_TEXT = (
-    "📝 اكتب أو أرسل رسالة صوتية 🎙️ مثل:\n"
+    "📝 اكتبي أو أرسلي رسالة صوتية 🎙️ مثل:\n"
     "• نزل الراتب\n"
     "• قهوة 5000\n"
     "• تكسي للجامعة 4 آلاف\n"
@@ -1114,10 +1115,10 @@ HELP_TEXT = (
     "• رصيدي الصحيح 350 ألف / صحح المدخرات إلى مليون و200\n"
     "• احذف عملية القهوة 5000\n"
     "• القهوة كانت 4000 مو 5000\n"
-    "• أو اضغط ↩️ تراجع تحت أي تسجيل\n\n"
-    "📸 أرسل صورة فاتورة\n"
-    f"📊 يصلك تقرير أسبوعي كل خميس الساعة {REPORT_HOUR}:00\n"
-    f"📅 شهرك المالي يبدأ يوم {MONTH_START_DAY} (يوم الراتب)، ويصلك فيه ملخص الشهر السابق\n\n"
+    "• أو اضغطي ↩️ تراجع تحت أي تسجيل\n\n"
+    "📸 أرسلي صورة فاتورة\n"
+    f"📊 يصلكِ تقرير أسبوعي كل خميس الساعة {REPORT_HOUR}:00\n"
+    f"📅 شهركِ المالي يبدأ يوم {MONTH_START_DAY} (يوم الراتب)، ويصلكِ فيه ملخص الشهر السابق\n\n"
     "⚙️ الأوامر: /balance /month /week /budget /last /undo /help"
 )
 
@@ -1132,8 +1133,8 @@ async def safe_reply(update, coro_factory, name):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"👋 أهلاً{ya(name_for(update.effective_user))}! أنا PocketMate، محاسبك الشخصي.\n"
-        f"🆔 رقم حسابك: {update.effective_user.id}\n\n" + HELP_TEXT,
+        f"👋 أهلاً{ya(name_for(update.effective_user))}! أنا PocketMate، محاسبتكِ الشخصية.\n"
+        f"🆔 رقم حسابكِ: {update.effective_user.id}\n\n" + HELP_TEXT,
         reply_markup=MAIN_KEYBOARD)
 
 
@@ -1188,7 +1189,7 @@ async def last_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines = [f"{r['date']}  {describe_tx({**r, 'date': now_date()})}" for r in rows]
             await update.effective_message.reply_text(
                 "🗂️ آخر العمليات:\n\n" + "\n".join(lines) +
-                "\n\nللحذف أو التعديل اكتب مثلاً: احذف عملية القهوة 5000")
+                "\n\nللحذف أو التعديل اكتبي مثلاً: احذف عملية القهوة 5000")
         await safe_reply(update, go, "last")
 
 
@@ -1231,7 +1232,7 @@ async def undo_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     added = context.user_data.get("undo", {}).pop(token, None)
     if not added:
         await query.edit_message_reply_markup(None)
-        await query.message.reply_text("⚠️ لا يمكن التراجع عن هذه العملية (قديمة أو تم التراجع عنها). استخدم /last")
+        await query.message.reply_text("⚠️ لا يمكن التراجع عن هذه العملية (قديمة أو تم التراجع عنها). استخدمي /last")
         return
     try:
         wb = download_workbook()
@@ -1265,7 +1266,7 @@ BUTTON_ACTIONS = {BTN_BALANCE: balance_cmd, BTN_MONTH: month_cmd, BTN_WEEK: week
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         await update.message.reply_text(
-            f"⛔ هذا البوت خاص. رقم حسابك {update.effective_user.id} غير موجود في ALLOWED_USER_IDS")
+            f"⛔ هذا البوت خاص. رقم حسابكِ {update.effective_user.id} غير موجود في ALLOWED_USER_IDS")
         return
     text = update.message.text
     if text in BUTTON_ACTIONS:
@@ -1290,13 +1291,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         media = update.message.voice or update.message.audio
         if media.duration and media.duration > 120:
-            await msg.edit_text("⚠️ الرسالة الصوتية طويلة، أرسل رسالة أقصر من دقيقتين")
+            await msg.edit_text("⚠️ الرسالة الصوتية طويلة، أرسلي رسالة أقصر من دقيقتين")
             return
         data = bytes(await (await media.get_file()).download_as_bytearray())
         mime = getattr(media, "mime_type", None) or "audio/ogg"
         audio = types.Part.from_bytes(data=data, mime_type=mime)
         pending = context.user_data.get("pending")
-        note = "This is a VOICE message from the user (Arabic, maybe Iraqi dialect)."
+        note = "This is a VOICE message from the user, a woman (Arabic, maybe Iraqi dialect)."
         if pending:
             note += f" It answers your clarification question about: {pending}"
         await run_ai(update, context, [audio, note], msg)
@@ -1333,7 +1334,7 @@ async def weekly_job(context: ContextTypes.DEFAULT_TYPE):
         text = f"❌ تعذّر إعداد التقرير الأسبوعي: {e}"
     for uid in ALLOWED_USER_IDS:
         name = USER_NAMES.get(uid)
-        greeting = f"🌙 مساء الخير{ya(name)}، هذا تقريرك الأسبوعي\n\n"
+        greeting = f"🌙 مساء الخير{ya(name)}، هذا تقريركِ الأسبوعي\n\n"
         try:
             await context.bot.send_message(chat_id=int(uid), text=greeting + text)
         except Exception:
@@ -1348,13 +1349,13 @@ async def salary_day_job(context: ContextTypes.DEFAULT_TYPE):
         wb = download_workbook()
         rows = read_rows(wb)
         prev_month_day = now_date() - timedelta(days=1)
-        text = ("🗓️ اليوم بداية شهرك المالي الجديد{NAME}!\n\n"
+        text = ("🗓️ اليوم بداية شهركِ المالي الجديد{NAME}!\n\n"
                 "📌 ملخص الشهر الذي انتهى:\n" + month_text(rows, prev_month_day) +
                 "\n\n" + balances_text(balances(rows)) +
-                "\n\n💰 هل نزل الراتب؟ اكتب: نزل الراتب\n🏦 ولا تنسَ تدّخر منه، مثلاً: ادخرت 30 ألف")
+                "\n\n💰 هل نزل الراتب؟ اكتبي: نزل الراتب\n🏦 ولا تنسي تدّخرين منه، مثلاً: ادخرت 30 ألف")
     except Exception as e:
         logger.exception("salary day")
-        text = "🗓️ اليوم بداية شهرك المالي{NAME}. هل نزل الراتب؟ اكتب: نزل الراتب"
+        text = "🗓️ اليوم بداية شهركِ المالي{NAME}. هل نزل الراتب؟ اكتبي: نزل الراتب"
     for uid in ALLOWED_USER_IDS:
         try:
             await context.bot.send_message(chat_id=int(uid), text=text.replace("{NAME}", ya(USER_NAMES.get(uid))))
