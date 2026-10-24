@@ -5,6 +5,7 @@ import time
 import logging
 import tempfile
 import threading
+import urllib.request
 from datetime import datetime, date, timedelta, timezone, time as dtime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -922,15 +923,21 @@ def describe_tx(tx):
 
 
 ACCOUNT_KEYS = {"avail", "savings", "gold", "owe", "lent", "usd"}
+OPENING_TO_ACCOUNT = {"رصيد افتتاحي": "avail", "رصيد افتتاحي للمدخرات": "savings",
+                      "رصيد افتتاحي للذهب": "gold", "رصيد افتتاحي للدولار": "usd"}
 
 
 def process(items, wb, name=None):
     """ينفّذ ما فهمه Gemini. يعيد dict فيه: text, needs_answer, added (العمليات المضافة لزر التراجع)."""
     txs, queries, problems, clarify, heard = [], [], [], None, None
     sets, deletes, edits, budgets_set = [], [], [], []
+    existing_types = {r["type"] for r in read_rows(wb)}
     for it in items:
         kind = it.get("kind")
-        if kind == "tx":
+        if kind == "tx" and it.get("type") in OPENING_TO_ACCOUNT and it.get("type") in existing_types:
+            # رصيد افتتاحي مسجّل من قبل: لا نكرره، بل نصحح الرصيد إلى القيمة المذكورة
+            sets.append({"account": OPENING_TO_ACCOUNT[it["type"]], "value": it.get("amount")})
+        elif kind == "tx":
             tx, err = validate_tx(it)
             (txs.append(tx) if tx else problems.append(err))
         elif kind == "query":
@@ -1355,6 +1362,27 @@ async def salary_day_job(context: ContextTypes.DEFAULT_TYPE):
             logger.exception(f"send salary-day to {uid}")
 
 
+# Render يضع رابط الخدمة تلقائياً في هذا المتغير
+SELF_URL = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("SELF_URL", "")
+
+
+def _ping(url):
+    with urllib.request.urlopen(url, timeout=30) as r:
+        return r.status
+
+
+async def keep_awake_job(context: ContextTypes.DEFAULT_TYPE):
+    """يزور البوت رابطه كل 10 دقائق حتى لا تنيمه خطة Render المجانية (تنام بعد 15 دقيقة)."""
+    if not SELF_URL:
+        return
+    try:
+        import asyncio
+        status = await asyncio.to_thread(_ping, SELF_URL)
+        logger.info(f"keep-awake ping: {status}")
+    except Exception as e:
+        logger.warning(f"keep-awake ping failed: {e}")
+
+
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -1369,6 +1397,7 @@ def main():
     if app.job_queue:
         app.job_queue.run_daily(weekly_job, time=dtime(hour=REPORT_HOUR, minute=0, tzinfo=IRAQ_TZ),
                                 days=(4,), name="weekly_report")
+        app.job_queue.run_repeating(keep_awake_job, interval=600, first=60, name="keep_awake")
         app.job_queue.run_monthly(salary_day_job, when=dtime(hour=10, minute=0, tzinfo=IRAQ_TZ),
                                   day=MONTH_START_DAY, name="salary_day")
     else:
