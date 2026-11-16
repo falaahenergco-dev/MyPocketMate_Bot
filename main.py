@@ -2,6 +2,7 @@ import os
 import io
 import json
 import time
+import asyncio
 import logging
 import tempfile
 import threading
@@ -26,6 +27,9 @@ from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)  # حتى لا يظهر توكن البوت في السجلات
 logger = logging.getLogger(__name__)
+
+# قفل يمنع ضياع عملية عند وصول رسالتين معاً (تنزيل → تعديل → رفع الملف)
+WB_LOCK = asyncio.Lock()
 
 # ═══════════════════════ الإعدادات (من Render → Environment) ═══════════════════════
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -282,24 +286,30 @@ def model_list():
 
 
 def call_gemini(contents):
-    """يجرب كل موديل؛ إذا كان مزدحماً (503/429) أو غير متاح (404) ينتقل للذي بعده."""
+    """يجرب كل موديل؛ عند الازدحام (503/429) أو عدم التوفر (404) أو رد JSON غير صالح ينتقل للتالي،
+    مع انتظار متزايد بين الجولات."""
     client = genai.Client(api_key=GEMINI_API_KEY)
     errors = []
-    for _ in range(2):
+    for attempt in range(3):
         for model in model_list():
             try:
                 resp = client.models.generate_content(
                     model=model,
                     contents=contents,
                     config=types.GenerateContentConfig(
-                        response_mime_type="application/json", temperature=0),
+                        response_mime_type="application/json", temperature=0,
+                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)),
                 )
-                logger.info(f"Gemini model used: {model}")
-                raw = resp.text.strip().replace("```json", "").replace("```", "").strip()
+                raw = (resp.text or "").strip().replace("```json", "").replace("```", "").strip()
                 data = json.loads(raw)
                 if isinstance(data, dict):
                     data = data.get("items", [data])
+                logger.info(f"Gemini model used: {model}")
                 return data
+            except json.JSONDecodeError:
+                errors.append(f"{model}: bad JSON")
+                logger.warning(f"Gemini {model} returned invalid JSON, trying next")
+                continue
             except Exception as e:
                 msg = str(e)
                 if any(c in msg for c in ("503", "429", "404", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "NOT_FOUND")):
@@ -308,8 +318,8 @@ def call_gemini(contents):
                     logger.warning(f"Gemini {model} failed ({code}), trying next")
                     continue
                 raise
-        time.sleep(5)
-    raise RuntimeError("كل موديلات Gemini غير متاحة الآن، حاول بعد قليل.\n" + "\n".join(errors[-5:]))
+        time.sleep(3 * (attempt + 1))
+    raise RuntimeError("كل موديلات Gemini غير متاحة الآن، حاولي بعد قليل.\n" + "\n".join(errors[-5:]))
 
 
 # ═══════════════════════ Google Drive ═══════════════════════
@@ -1057,6 +1067,10 @@ def process(items, wb, name=None):
         if spent_cats:
             replies += budget_alerts(rows, read_budgets(wb), spent_cats)
 
+    # سؤال التوضيح مع عمليات صالحة في نفس الرسالة: لا نتجاهله
+    if clarify and changes:
+        replies.append("❓ " + clarify)
+
     for q in queries:
         kind = q.get("query")
         if kind == "month":
@@ -1070,7 +1084,7 @@ def process(items, wb, name=None):
         elif not changes:
             replies.append(overview_text(wb, rows, name))
 
-    return result("\n\n".join(replies + warnings + ["⚠️ " + p for p in problems]), False, added)
+    return result("\n\n".join(replies + warnings + ["⚠️ " + p for p in problems]), bool(clarify), added)
 
 
 def undo_added(wb, added):
@@ -1145,7 +1159,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if allowed(update):
         async def go():
-            wb = download_workbook()
+            wb = await asyncio.to_thread(download_workbook)
             await update.effective_message.reply_text(overview_text(wb, read_rows(wb), name_for(update.effective_user)))
         await safe_reply(update, go, "balance")
 
@@ -1153,7 +1167,7 @@ async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def month_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if allowed(update):
         async def go():
-            wb = download_workbook()
+            wb = await asyncio.to_thread(download_workbook)
             rows = read_rows(wb)
             text = month_text(rows)
             budgets = read_budgets(wb)
@@ -1166,7 +1180,7 @@ async def month_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def week_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if allowed(update):
         async def go():
-            wb = download_workbook()
+            wb = await asyncio.to_thread(download_workbook)
             await update.effective_message.reply_text(weekly_text(read_rows(wb), read_budgets(wb)))
         await safe_reply(update, go, "week")
 
@@ -1174,7 +1188,7 @@ async def week_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def budget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if allowed(update):
         async def go():
-            wb = download_workbook()
+            wb = await asyncio.to_thread(download_workbook)
             await update.effective_message.reply_text(budget_text(read_rows(wb), read_budgets(wb)))
         await safe_reply(update, go, "budget")
 
@@ -1182,7 +1196,8 @@ async def budget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def last_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if allowed(update):
         async def go():
-            rows = read_rows(download_workbook())[-10:]
+            wb = await asyncio.to_thread(download_workbook)
+            rows = read_rows(wb)[-10:]
             if not rows:
                 await update.effective_message.reply_text("لا توجد عمليات بعد.")
                 return
@@ -1196,14 +1211,15 @@ async def last_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def undo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if allowed(update):
         async def go():
-            wb = download_workbook()
-            rows = read_rows(wb)
-            if not rows:
-                await update.effective_message.reply_text("لا توجد عمليات لحذفها.")
-                return
-            last = rows[-1]
-            delete_tx_row(wb, last["row"])
-            upload_workbook(wb)
+            async with WB_LOCK:
+                wb = await asyncio.to_thread(download_workbook)
+                rows = read_rows(wb)
+                if not rows:
+                    await update.effective_message.reply_text("لا توجد عمليات لحذفها.")
+                    return
+                last = rows[-1]
+                delete_tx_row(wb, last["row"])
+                await asyncio.to_thread(upload_workbook, wb)
             await update.effective_message.reply_text(
                 f"🗑️ حُذفت آخر عملية{ya(name_for(update.effective_user))}:\n" + describe_tx({**last, "date": last["date"] or now_date()}) +
                 "\n\n" + balances_text(balances(read_rows(wb))))
@@ -1235,10 +1251,11 @@ async def undo_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("⚠️ لا يمكن التراجع عن هذه العملية (قديمة أو تم التراجع عنها). استخدمي /last")
         return
     try:
-        wb = download_workbook()
-        removed = undo_added(wb, added)
-        if removed:
-            upload_workbook(wb)
+        async with WB_LOCK:
+            wb = await asyncio.to_thread(download_workbook)
+            removed = undo_added(wb, added)
+            if removed:
+                await asyncio.to_thread(upload_workbook, wb)
         await query.edit_message_reply_markup(None)
         text = (f"↩️ تم التراجع{ya(name_for(update.effective_user))} عن:\n" + "\n".join(describe_tx({**r, "date": r["date"] or now_date()}) for r in removed)
                 if removed else "⚠️ العملية تغيّرت أو حُذفت مسبقاً")
@@ -1249,10 +1266,13 @@ async def undo_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def run_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, parts, msg, pending_text=None):
-    """parts = محتوى الرسالة (نص/صورة/صوت). نقرأ الملف أولاً حتى يعرف Gemini العمليات السابقة."""
-    wb = download_workbook()
-    items = call_gemini([build_prompt(read_rows(wb))] + parts)
-    res = process(items, wb, name_for(update.effective_user))
+    """parts = محتوى الرسالة (نص/صورة/صوت). نقرأ الملف أولاً حتى يعرف Gemini العمليات السابقة.
+    القفل يمنع تداخل رسالتين، و to_thread يمنع تجميد البوت أثناء انتظار Gemini/Drive."""
+    name = name_for(update.effective_user)
+    async with WB_LOCK:
+        wb = await asyncio.to_thread(download_workbook)
+        items = await asyncio.to_thread(call_gemini, [build_prompt(read_rows(wb))] + parts)
+        res = await asyncio.to_thread(process, items, wb, name)
     # إذا سأل البوت سؤال توضيح، نحفظ الرسالة الأصلية لنربطها بالجواب
     heard = next((i.get("text") for i in items if i.get("kind") == "heard"), None)
     context.user_data["pending"] = (pending_text or heard) if res["needs_answer"] else None
@@ -1327,7 +1347,7 @@ async def weekly_job(context: ContextTypes.DEFAULT_TYPE):
         logger.warning("Weekly report skipped: set ALLOWED_USER_IDS in Render")
         return
     try:
-        wb = download_workbook()
+        wb = await asyncio.to_thread(download_workbook)
         text = weekly_text(read_rows(wb), read_budgets(wb))
     except Exception as e:
         logger.exception("weekly report")
@@ -1346,7 +1366,7 @@ async def salary_day_job(context: ContextTypes.DEFAULT_TYPE):
     if not ALLOWED_USER_IDS:
         return
     try:
-        wb = download_workbook()
+        wb = await asyncio.to_thread(download_workbook)
         rows = read_rows(wb)
         prev_month_day = now_date() - timedelta(days=1)
         text = ("🗓️ اليوم بداية شهركِ المالي الجديد{NAME}!\n\n"
@@ -1377,7 +1397,6 @@ async def keep_awake_job(context: ContextTypes.DEFAULT_TYPE):
     if not SELF_URL:
         return
     try:
-        import asyncio
         status = await asyncio.to_thread(_ping, SELF_URL)
         logger.info(f"keep-awake ping: {status}")
     except Exception as e:
