@@ -1,5 +1,5 @@
 python-telegram-bot[job-queue]==21.9
-google-genai==1.16.0
+google-genai
 google-api-python-client==2.118.0
 google-auth==2.28.0
 openpyxl==3.1.2
